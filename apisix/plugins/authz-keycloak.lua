@@ -66,11 +66,7 @@ local schema = {
         access_token_expires_leeway = {type = "integer", minimum = 0, default = 0},
         refresh_token_expires_in = {type = "integer", minimum = 1, default = 3600},
         refresh_token_expires_leeway = {type = "integer", minimum = 0, default = 0},
-        token_userinfo_endpoint = {type = "string", minLength = 1, maxLength = 4096},
-        token_generation_endpoint = {type = "string", minLength = 1, maxLength = 4096},
-        allow_public_client = {type = "boolean", default = false},
-        include_user_info = {type = "boolean", default = false}
-    },
+},
     allOf = {
         -- Require discovery or token endpoint.
         {
@@ -308,10 +304,6 @@ local function authz_keycloak_get_endpoint(conf, endpoint)
     return nil
 end
 
--- Return the userinfo endpoint from the configuration.
-local function authz_keycloak_get_token_userinfo_endpoint(conf)
-    return authz_keycloak_get_endpoint(conf, "token_userinfo_endpoint")
-end
 
 -- Return the token endpoint from the configuration.
 local function authz_keycloak_get_token_endpoint(conf)
@@ -327,15 +319,15 @@ end
 
 -- Return access_token expires_in value (in seconds).
 local function authz_keycloak_access_token_expires_in(conf, expires_in)
-    return (expires_in or conf.access_token_expires_in or 300)
-           - 1 - (conf.access_token_expires_leeway or 0)
+    return (expires_in or conf.access_token_expires_in)
+           - 1 - conf.access_token_expires_leeway
 end
 
 
 -- Return refresh_token expires_in value (in seconds).
 local function authz_keycloak_refresh_token_expires_in(conf, expires_in)
-    return (expires_in or conf.refresh_token_expires_in or 3600)
-           - 1 - (conf.refresh_token_expires_leeway or 0)
+    return (expires_in or conf.refresh_token_expires_in)
+           - 1 - conf.refresh_token_expires_leeway
 end
 
 
@@ -570,62 +562,6 @@ local function authz_keycloak_resolve_resource(conf, uri, sa_access_token)
 end
 
 
-local function validate_token(conf, ctx, token)
-    
-    -- Get userInfo endpoint URL.
-    local userInfo_endpoint = authz_keycloak_get_token_userinfo_endpoint(conf)
-    if not userInfo_endpoint then
-        err = "Unable to determine userInfo endpoint."
-        log.error(err)
-        log.error(core.json.encode(conf))
-        return 500, err
-    end
-    log.debug("userInfo endpoint: ", userInfo_endpoint)
-
-    local httpc = authz_keycloak_get_http_client(conf)
-
-    local params = {
-        method = "GET",
-        headers = {
-            ["Authorization"] = token
-        }
-    }
-
-    params = authz_keycloak_configure_params(params, conf)
-
-    local res, err = httpc:request_uri(userInfo_endpoint, params)
-
-    if not res then
-        err = "Error while sending authz request to " .. userInfo_endpoint .. ": " .. err
-        log.error(err)
-        return 500, err
-    end
-
-    log.debug("Response status: ", res.status, ", data: ", res.body)
-
-    if res.status == 403 then
-        -- Request permanently denied, e.g. due to lacking permissions.
-        log.debug('Request denied: HTTP 403 Forbidden. Body: ', res.body)
-        return res.status, res.body
-    elseif res.status == 401 then
-        -- Request temporarily denied, e.g access token not valid.
-        log.debug('Request denied: HTTP 401 Unauthorized. Body: ', res.body)
-        return res.status, res.body
-    elseif res.status >= 400 then
-        -- Some other error. Log full response.
-        log.error('Request denied: userInfo endpoint returned an error (status: ',
-                  res.status, ', body: ', res.body, ').')
-        return res.status, res.body
-    end
-
-
-    -- Set X-User-Info header to introspection endpoint response.
-    if conf.include_user_info == true then
-        core.request.set_header(ctx, "X-User-Info", (core.json.encode(res.body)));
-    end
-end
-
-
 local function evaluate_permissions(conf, ctx, token)
     -- Ensure discovered data.
     local err = authz_keycloak_ensure_discovered_data(conf)
@@ -738,10 +674,6 @@ local function evaluate_permissions(conf, ctx, token)
     end
 
     -- Request accepted.
-    -- call method to validate token if configuration include_user_info is set to true
-    if conf.include_user_info == true then        
-        return validate_token(conf, ctx, token);        
-    end
 end
 
 
@@ -757,128 +689,21 @@ local function fetch_jwt_token(ctx)
     end
     return token
 end
--- This function is used to split data from array by respective delimitter and return array in result
-local function stringsplit(s, delimiter)
-    local result = {};
-    for match in (s..delimiter):gmatch("(.-)"..delimiter) do
-        table.insert(result, match);
-    end
-    return result;
-end
 
--- To get new access token by calling get token api
-local function generate_token(conf,ctx)
-    log.warn("------------Generate Access Token Function Called---------------")    
-    --Read Body
-    ngx.req.read_body(); --To read requestbody first
-    --Get Body Data
-    local RequestBody=ngx.req.get_body_data();
-    local UserName = ""; local Password = "";    
-    --split by &
-    local strBodyArr = stringsplit(RequestBody, "&");
-    if strBodyArr then
-        for k, strBodyValue in ipairs(strBodyArr) do                     
-            if string.find(strBodyValue, "username") then
-                --split by =
-                local usr = stringsplit(strBodyValue, "=");
-                UserName = usr[2];            
-            end
-            if string.find(strBodyValue, "password") then
-                local psw = stringsplit(strBodyValue, "=");
-                Password = psw[2];
-            end
-        end
-    end
-
-    local client_id = authz_keycloak_get_client_id(conf)
-    
-    local token_endpoint = authz_keycloak_get_token_endpoint(conf)
-    
-    if not token_endpoint then
-        log.error("Unable to determine token endpoint.")
-        return 500, "Unable to determine token endpoint."
-    end
-        local httpc = authz_keycloak_get_http_client(conf)
-
-        local params = {
-            method = "POST",
-            body =  ngx.encode_args({
-                grant_type = "password",
-                client_id = client_id,
-                client_secret = conf.client_secret,
-                username = UserName,
-                password = Password
-            }),
-            headers = {
-                ["Content-Type"] = "application/x-www-form-urlencoded"
-            }
-        }
-
-        params = authz_keycloak_configure_params(params, conf)
-
-        local res, err = httpc:request_uri(token_endpoint, params)
-
-        if not res then
-            err = "Accessing token endpoint URL (" .. token_endpoint
-                  .. ") failed: " .. err
-            log.error(err)
-            return 401, {message = err}
-        end
-       
-        log.debug("Response data: " .. res.body)
-        local json, err = authz_keycloak_parse_json_response(res)
-       
-        log.warn(core.json.encode(json))
-        if not json then
-            err = "Could not decode JSON from token endpoint"
-                  .. (err and (": " .. err) or '.')
-            log.error(err)
-            return 401, {message = err}
-        end
-        
-    return  res.status, res.body;
-end
 
 function _M.access(conf, ctx)
-    -- Get Requested URI
-    local RequestURI = string.upper(ngx.var.request_uri);
-
-    if conf.token_generation_endpoint then
-	-- Get Token generation end point of key cloak which we have mession in keyclock plugin config
-        local token_generation_endpoint = string.upper(conf.token_generation_endpoint);
-        local curr_req_method = string.upper(ctx.curr_req_matched["_method"]);
-
-         if curr_req_method ~= "POST" then
-             log.error("Invalid request type")
-             return 400, {message = "Request method must be POST only.!"}
-         end
-
-        --Call Generate Access Token function if "\Token" found in URI based on configuration
-        if RequestURI == token_generation_endpoint then
-           return generate_token(conf,ctx);
-        end
-    end
-    -- hit keycloak-auth access
+    log.debug("hit keycloak-auth access")
     local jwt_token, err = fetch_jwt_token(ctx)
-        
     if not jwt_token then
-            log.error("failed to fetch JWT token: ", err)
-            return 401, {message = "Missing JWT token in request"}
+        log.error("failed to fetch JWT token: ", err)
+        return 401, {message = "Missing JWT token in request"}
     end
 
-    local status, body;
-    if conf.allow_public_client == true then
-            -- call method to validate token
-            status, body = validate_token(conf, ctx, jwt_token);        
-    else
-            status, body = evaluate_permissions(conf, ctx, jwt_token)        
-    end
-
+    local status, body = evaluate_permissions(conf, ctx, jwt_token)
     if status then
-            return status, body
+        return status, body
     end
-end 
+end
 
 
 return _M
-

@@ -63,10 +63,6 @@ For more information on Keycloak, refer to [Keycloak Authorization Docs](https:/
 | keepalive                      | boolean       | optional    | true                                          |                                                                    | Enable HTTP keep-alive to keep connections open after use. Set to `true` if you expect a lot of requests to Keycloak.                                       |
 | keepalive_timeout              | integer       | optional    | 60000                                         | positive integer >= 1000                                           | Idle timeout after which established HTTP connections will be closed.                                                                                       |
 | keepalive_pool                 | integer       | optional    | 5                                             | positive integer >= 1                                              | Maximum number of connections in the connection pool.                                                                                                       |
-| token_userinfo_endpoint        | string        | optional    |                                               | 					                                                | Endpoint url of keycloak to get user information. Used in validate token function.                       													  |
-| token_generation_endpoint      | string        | optional    |                                               | 					                                                | Endpoint path to identify URL pattern based on Path configuration. So that we can generate token if Request Uri match with this path.                       |
-| allow_public_client            | boolean       | optional    | false                                         |  						                                            | To enbale token verification and get user information in response from configured userInfo_endpoint.                                                        |
-| include_user_info              | boolean       | optional    | false                                         |  						                                            | Include user information in ctx header as `X-User-Info`. So that end user can get user information in response header.                               		  |
 
 ### Discovery and Endpoints
 
@@ -133,31 +129,6 @@ of the same name. The scope is then added to every permission to check.
 
 If `lazy_load_paths` is `false`, the plugin adds the mapped scope to any of the static permissions configured
 in the `permissions` attribute, even if they contain one or more scopes already.
-
-### Customized authentication and token verification by plugin configuration
-
-Till now whenever new request came, keycloak plugin was first checking JWT token. 
-But from now if user don't have token then, we can generate new token with `token_endpoint` based on incomming Request URI path matching in `token_generation_endpoint`.
-This will use to generate new JWT token. And for other route config,if will check token and redirect to the resource which are allocated to user.
-
-Now by set `allow_public_client` to `true` in keycloak plugin, we can validate JWT token and get user information in response.
-
-Property `token_userinfo_endpoint` will userd to fatch user information from keycloak and to in respose of redirect endpoint.
-To get user information in redirect endpoint, we need to set `include_user_info` to `true`. So that we will get user information in header named `X-User-Info`.
-
-## Customized authentication example 
-
-```cURL Code
-curl --location --request POST 'http://127.0.0.1:9080/api/Token' \
---header 'Accept: application/json, text/plain, */*' \
---header 'Content-Type: application/x-www-form-urlencoded' \
---header 'Origin: http://127.0.0.1:8080' \
---header 'Referer: 127.0.0.1:8080' \
---header 'client_secret: Client Secret' \
---header 'client_id: Client ID' \
---data-urlencode 'username=User Name' \
---data-urlencode 'password=Password'
-```
 
 ## How To Enable
 
